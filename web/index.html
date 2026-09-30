@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jenkinsfile to GitLab CI Converter</title>
+<meta name="description" content="Convert a declarative Jenkinsfile to .gitlab-ci.yml in your browser, with a list of items that need manual review.">
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70; --line: #e2e2de;
+    --accent: #e24329; --accent-ink: #ffffff; --warn-bg: #fff5e6; --warn-line: #f0c27a; --ok: #1f7a4d;
+    --code-bg: #fbfbfa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141416; --panel: #1c1c1f; --ink: #ececef; --muted: #9a9aa2; --line: #2e2e33;
+      --accent: #fc6d26; --accent-ink: #141416; --warn-bg: #2b2215; --warn-line: #8a6326; --ok: #5cc592;
+      --code-bg: #18181b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { max-width: 1200px; margin: 0 auto; padding: 28px 16px 8px; }
+  h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); max-width: 760px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  select { max-width: 100%; }
+  select, button { font: inherit; border-radius: 8px; border: 1px solid var(--line);
+                   background: var(--panel); color: var(--ink); padding: 7px 12px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: progress; }
+  #status { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 12px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: minmax(0,1fr); } }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+          display: flex; flex-direction: column; min-width: 0; }
+  .pane h2 { font-size: 13px; font-weight: 600; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line);
+             display: flex; justify-content: space-between; align-items: center; color: var(--muted); }
+  textarea, pre { margin: 0; border: 0; width: 100%; height: 560px; padding: 12px; background: var(--code-bg);
+                  color: var(--ink); font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+                  resize: vertical; overflow: auto; white-space: pre; tab-size: 4; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #findings { margin-top: 12px; }
+  .summary { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; margin-bottom: 8px; }
+  .summary b { font-variant-numeric: tabular-nums; }
+  ul { margin: 0; padding-left: 20px; }
+  .manual { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; }
+  .manual h3, details summary { font-size: 14px; margin: 0 0 6px; }
+  details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  details summary { cursor: pointer; margin: 0; }
+  li { margin: 3px 0; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .err { color: var(--accent); font-weight: 600; }
+  footer { max-width: 1200px; margin: 0 auto; padding: 8px 16px 32px; color: var(--muted); font-size: 13px; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Jenkinsfile → .gitlab-ci.yml</h1>
+  <p>Paste a declarative Jenkinsfile and get a GitLab CI configuration plus a checklist of what still needs a human.
+     Runs fully in your browser: the same Python package as the CLI, executed with Pyodide. Nothing is uploaded.</p>
+</header>
+<main>
+  <div class="bar">
+    <select id="example" aria-label="Load an example">
+      <option value="">Load an example…</option>
+      <option value="examples/python-service.Jenkinsfile">Python service (parallel, credentials, deploy)</option>
+      <option value="examples/java-matrix.Jenkinsfile">Java matrix build (parameters, matrix, when)</option>
+    </select>
+    <button id="convert" class="primary" disabled>Convert</button>
+    <button id="copy" disabled>Copy YAML</button>
+    <button id="download" disabled>Download .gitlab-ci.yml</button>
+    <span id="status">Loading Python runtime…</span>
+  </div>
+  <div class="grid">
+    <section class="pane">
+      <h2>Jenkinsfile</h2>
+      <textarea id="src" spellcheck="false" aria-label="Jenkinsfile input">pipeline {
+    agent { docker { image 'python:3.12-slim' } }
+    stages {
+        stage('Install') {
+            steps { sh 'pip install -r requirements.txt' }
+        }
+        stage('Test') {
+            steps {
+                sh 'pytest --junitxml=report.xml'
+                junit 'report.xml'
+            }
+        }
+        stage('Deploy') {
+            when { branch 'main' }
+            input { message 'Deploy?' }
+            steps { sh './deploy.sh ${BUILD_NUMBER}' }
+        }
+    }
+}</textarea>
+    </section>
+    <section class="pane">
+      <h2>.gitlab-ci.yml</h2>
+      <pre id="out" aria-live="polite"></pre>
+    </section>
+  </div>
+  <section id="findings"></section>
+</main>
+<footer>
+  Source and CLI: <a href="https://github.com/sonubepop/jenkins-to-gitlab-migrator">github.com/sonubepop/jenkins-to-gitlab-migrator</a>
+  · Supports declarative pipelines only · Always review the output before using it.
+</footer>
+
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const MODULES = ["__init__.py", "parser.py", "yamlout.py", "converter.py", "cli.py"];
+let py = null;
+
+function esc(s) {
+  return s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function boot() {
+  try {
+    const override = new URLSearchParams(location.search).get("pyodide");
+    py = await loadPyodide(override ? { indexURL: override } : {});
+    py.FS.mkdir("/pkg");
+    py.FS.mkdir("/pkg/jenkins2gitlab");
+    for (const name of MODULES) {
+      const res = await fetch("jenkins2gitlab/" + name);
+      if (!res.ok) throw new Error("could not load " + name);
+      py.FS.writeFile("/pkg/jenkins2gitlab/" + name, await res.text());
+    }
+    py.runPython(`
+import sys, json
+sys.path.insert(0, "/pkg")
+from jenkins2gitlab import convert
+def run(src):
+    try:
+        r = convert(src)
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+    return json.dumps({
+        "yaml": r.to_yaml(),
+        "manual": [f"{f.where}: {f.message}" for f in r.manual_items],
+        "auto": [f"{f.where}: {f.message}" for f in r.findings if f.level == "info"],
+        "jobs": sum(1 for v in r.config.values() if isinstance(v, dict) and "script" in v),
+        "stages": len(r.config.get("stages", [])),
+    })
+`);
+    $("status").textContent = "Ready";
+    $("convert").disabled = false;
+    run();
+  } catch (e) {
+    $("status").innerHTML = '<span class="err">Could not start the Python runtime: ' + esc(String(e.message || e)) + "</span>";
+  }
+}
+
+function run() {
+  if (!py) return;
+  const res = JSON.parse(py.globals.get("run")($("src").value));
+  const f = $("findings");
+  if (res.error) {
+    $("out").textContent = "";
+    f.innerHTML = '<p class="err">Could not convert: ' + esc(res.error) + "</p>";
+    $("copy").disabled = $("download").disabled = true;
+    return;
+  }
+  $("out").textContent = res.yaml;
+  $("copy").disabled = $("download").disabled = false;
+  let html = `<div class="summary"><span><b>${res.stages}</b> stages</span><span><b>${res.jobs}</b> jobs</span>
+    <span><b>${res.auto.length}</b> converted automatically</span>
+    <span><b>${res.manual.length}</b> need manual review</span></div>`;
+  html += res.manual.length
+    ? `<div class="manual"><h3>Needs manual review</h3><ul>${res.manual.map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div>`
+    : `<p class="ok">Nothing needs manual review.</p>`;
+  html += `<details><summary>What was converted automatically (${res.auto.length})</summary>
+    <ul>${res.auto.map((m) => `<li>${esc(m)}</li>`).join("")}</ul></details>`;
+  f.innerHTML = html;
+}
+
+$("convert").addEventListener("click", run);
+$("src").addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") run(); });
+$("example").addEventListener("change", async (e) => {
+  if (!e.target.value) return;
+  const res = await fetch(e.target.value);
+  $("src").value = await res.text();
+  run();
+});
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("out").textContent); $("status").textContent = "Copied"; }
+  catch { $("status").textContent = "Copy failed - select the text manually"; }
+});
+$("download").addEventListener("click", () => {
+  const url = URL.createObjectURL(new Blob([$("out").textContent], { type: "text/yaml" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: ".gitlab-ci.yml" });
+  a.click();
+  URL.revokeObjectURL(url);
+});
+boot();
+</script>
+</body>
+</html>

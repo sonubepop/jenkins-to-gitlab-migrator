@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: pytest --cov=jenkins2gitlab --cov-report=term
+      - name: Examples and .gitlab-ci.yml are valid against GitLab's CI schema
+        run: ./scripts/validate-examples.sh
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+      - name: Build image
+        run: docker build -t jenkins2gitlab:ci .
+      - name: Smoke test - convert an example inside the container
+        run: docker run --rm -v "$PWD/examples:/work:ro" jenkins2gitlab:ci python-service.Jenkinsfile
+      - name: Push to GitHub Container Registry
+        if: github.ref == 'refs/heads/main'
+        run: |
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag jenkins2gitlab:ci "$IMAGE:${GITHUB_SHA::7}"
+          docker tag jenkins2gitlab:ci "$IMAGE:latest"
+          docker push "$IMAGE:${GITHUB_SHA::7}"
+          docker push "$IMAGE:latest"
